@@ -82,10 +82,20 @@ class Attention(OurLayer):
         self.k_dense = Dense(self.key_size * self.heads, use_bias=False)
         self.v_dense = Dense(self.out_dim, use_bias=False)
 
+    def mask(self, x, mask, mode='mul'):
+        if mask is None:
+            return x
+        else:
+            for _ in range(K.ndim(x) - K.ndim(mask)):
+                mask = K.expand_dims(mask, K.ndim(mask))
+            if mode == 'mul':
+                return x * mask
+            else:
+                return x - (1 - mask) * 1e10
+
     def call(self, inputs):
-        q, k, v = inputs[: 3]
+        q, k, v = inputs[:3]
         v_mask, q_mask = None, None
-        # 这里的mask.shape=[batch_size, seq_len]或[batch_size, seq_len, 1]
         if len(inputs) > 3:
             v_mask = inputs[3]
             if len(inputs) > 4:
@@ -103,29 +113,22 @@ class Attention(OurLayer):
         kw = K.permute_dimensions(kw, (0, 2, 1, 3))
         vw = K.permute_dimensions(vw, (0, 2, 1, 3))
         # Attention
-        a = tf.einsum('bhik,bhjk->bhij', qw, kw) / self.key_size**0.5
+        a = tf.einsum('ijkl,ijml->ijkm', qw, kw) / self.key_size**0.5
         a = K.permute_dimensions(a, (0, 3, 2, 1))
-        a = to_mask(a, v_mask, 'add')
+        a = self.mask(a, v_mask, 'add')
         a = K.permute_dimensions(a, (0, 3, 2, 1))
-        if (self.mask_right is not False) or (self.mask_right is not None):
-            if self.mask_right is True:
-                ones = K.ones_like(a[: 1, : 1])
-                mask = (ones - K.tf.matrix_band_part(ones, -1, 0)) * 1e10
-                a = a - mask
-            else:
-                # 这种情况下，mask_right是外部传入的0/1矩阵，shape=[q_len, k_len]
-                mask = (1 - K.constant(self.mask_right)) * 1e10
-                mask = K.expand_dims(K.expand_dims(mask, 0), 0)
-                self.mask = mask
-                a = a - mask
+        if self.mask_right:
+            ones = K.ones_like(a[:1, :1])
+            mask = (ones - K.tf.matrix_band_part(ones, -1, 0)) * 1e10
+            a = a - mask
         a = K.softmax(a)
-        self.a = a
         # 完成输出
         o = tf.einsum('ijkl,ijlm->ijkm', a, vw)
         o = K.permute_dimensions(o, (0, 2, 1, 3))
         o = K.reshape(o, (-1, K.shape(o)[1], self.out_dim))
-        o = to_mask(o, q_mask, 'mul')
+        o = self.mask(o, q_mask, 'mul')
         return o
+    
     def compute_output_shape(self, input_shape):
         return (input_shape[0][0], input_shape[0][1], self.out_dim)
 

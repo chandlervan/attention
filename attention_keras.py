@@ -2,6 +2,7 @@
 
 from keras.layers import *
 import keras.backend as K
+import tensorflow as tf
 
 
 def to_mask(x, mask, mode='mul'):
@@ -74,11 +75,13 @@ class Attention(OurLayer):
         self.out_dim = heads * size_per_head
         self.key_size = key_size if key_size else size_per_head
         self.mask_right = mask_right
+
     def build(self, input_shape):
         super(Attention, self).build(input_shape)
         self.q_dense = Dense(self.key_size * self.heads, use_bias=False)
         self.k_dense = Dense(self.key_size * self.heads, use_bias=False)
         self.v_dense = Dense(self.out_dim, use_bias=False)
+
     def call(self, inputs):
         q, k, v = inputs[: 3]
         v_mask, q_mask = None, None
@@ -100,7 +103,7 @@ class Attention(OurLayer):
         kw = K.permute_dimensions(kw, (0, 2, 1, 3))
         vw = K.permute_dimensions(vw, (0, 2, 1, 3))
         # Attention
-        a = K.batch_dot(qw, kw, [3, 3]) / self.key_size**0.5
+        a = tf.einsum('bhik,bhjk->bhij', qw, kw) / self.key_size**0.5
         a = K.permute_dimensions(a, (0, 3, 2, 1))
         a = to_mask(a, v_mask, 'add')
         a = K.permute_dimensions(a, (0, 3, 2, 1))
@@ -118,7 +121,7 @@ class Attention(OurLayer):
         a = K.softmax(a)
         self.a = a
         # 完成输出
-        o = K.batch_dot(a, vw, [3, 2])
+        o = tf.einsum('ijkl,ijlm->ijkm', a, vw)
         o = K.permute_dimensions(o, (0, 2, 1, 3))
         o = K.reshape(o, (-1, K.shape(o)[1], self.out_dim))
         o = to_mask(o, q_mask, 'mul')
